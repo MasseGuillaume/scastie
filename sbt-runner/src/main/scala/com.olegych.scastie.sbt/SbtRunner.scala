@@ -10,7 +10,7 @@ import scala.meta.parsers.Parsed
 
 import upickle.default.{read => uread, write => uwrite, Reader}
 
-import akka.actor.{Actor, ActorRef}
+import akka.actor.{Actor, ActorRef, Props}
 
 import scala.concurrent._
 import scala.concurrent.duration._
@@ -24,21 +24,29 @@ object SbtRunner {
   def instrument(
       inputs: Inputs
   ): Either[InstrumentationFailure, Inputs] = {
-    if (inputs.worksheetMode && inputs.target.targetType != ScalaTargetType.Dotty) {
+    if (inputs.worksheetMode &&
+        inputs.target.targetType != ScalaTargetType.Dotty) {
+
       instrumentation
         .Instrument(inputs.code, inputs.target)
         .map(instrumented => inputs.copy(code = instrumented))
     } else Right(inputs)
-  }  
+  }
 }
 
 class SbtRunner(runTimeout: FiniteDuration, production: Boolean) extends Actor {
+
+  private case object SbtWarmUp
+
   private val defaultConfig = Inputs.default
 
-  private var sbt = new Sbt(defaultConfig, production)
+  private var sbt = new Sbt(defaultConfig)
+
   private val log = LoggerFactory.getLogger(getClass)
 
-  override def preStart(): Unit = ()
+  override def preStart(): Unit = {
+    self ! SbtWarmUp
+  }
   override def postStop(): Unit = sbt.exit()
 
   private def run(snippetId: SnippetId,
@@ -83,7 +91,7 @@ class SbtRunner(runTimeout: FiniteDuration, production: Boolean) extends Actor {
           )
 
       sbt.kill()
-      sbt = new Sbt(defaultConfig, production)
+      sbt = new Sbt(defaultConfig)
       true
     }
 
@@ -117,18 +125,24 @@ class SbtRunner(runTimeout: FiniteDuration, production: Boolean) extends Actor {
   }
 
   def receive = {
-    // case MkEnsimeConfigRequest => {
-    //   log.info("Generating ensime config file")
-    //   sbt.eval(
-    //     "ensimeConfig",
-    //     defaultConfig,
-    //     (line, _, _, _) => {
-    //       log.info(line)
-    //     },
-    //     reload = false
-    //   )
-    //   sender ! MkEnsimeConfigResponse(sbt.sbtDir)
-    // }
+    case SbtWarmUp => {
+      log.info("Got SbtWarmUp")
+      if (production) {
+        sbt.warmUp()
+      }
+    }
+    case CreateEnsimeConfigRequest => {
+      log.info("Generating ensime config file")
+      sbt.eval(
+        "ensimeConfig",
+        defaultConfig,
+        (line, _, _, _) => {
+          log.info(line)
+        },
+        reload = false
+      )
+      sender() ! EnsimeConfigResponse(sbt.sbtDir)
+    }
 
     case SbtTask(snippetId, inputs, ip, login, progressActor) => {
       log.info("login: {}, ip: {} run {}", login, ip, inputs)
@@ -213,6 +227,8 @@ class SbtRunner(runTimeout: FiniteDuration, production: Boolean) extends Actor {
   ): (String, Boolean, Boolean, Boolean) => Unit = {
     (line, done, sbtError, reload) =>
       {
+        log.debug(line)
+
         val lineOffset = getLineOffset(worksheetMode)
 
         val problems = extractProblems(line, lineOffset)

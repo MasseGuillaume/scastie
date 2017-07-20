@@ -11,7 +11,7 @@ import java.nio.file._
 import java.io.{BufferedReader, IOException, InputStreamReader}
 import java.nio.charset.StandardCharsets
 
-class Sbt(defaultConfig: Inputs, production: Boolean) {
+class Sbt(defaultConfig: Inputs) {
 
   private val log = LoggerFactory.getLogger(getClass)
 
@@ -30,13 +30,6 @@ class Sbt(defaultConfig: Inputs, production: Boolean) {
   write(projectDir.resolve("build.properties"), s"sbt.version = 0.13.15")
 
   private val pluginFile = projectDir.resolve("plugins.sbt")
-
-  // private val ensimeVersion = "2.0.0-SNAPSHOT"
-  // private val secretSbtConfigExtra = s"""
-  //                                       |// this is where the ensime-server snapshots are hosted
-  //                                       |resolvers += Resolver.sonatypeRepo("snapshots")
-  //                                       |libraryDependencies += "org.ensime" %% "ensime" % "$ensimeVersion"
-  //                                       |""".stripMargin
 
   private def setup(): Unit = {
     setConfig(defaultConfig)
@@ -78,14 +71,11 @@ class Sbt(defaultConfig: Inputs, production: Boolean) {
     (process, process.getOutputStream, in)
   }
 
-  private def warmUp(): Unit = {
-    if (production) {
-      log.info("warming up sbt")
-      val Right(in) = SbtRunner.instrument(defaultConfig)
-      eval("run", in, (line, _, _, _) => log.info(line), reload = false)
-      log.info("warming up sbt done")
-      ()
-    }
+  def warmUp(): Unit = {
+    log.info("warming up sbt")
+    val Right(in) = SbtRunner.instrument(defaultConfig)
+    eval("run", in, (line, _, _, _) => log.info(line), reload = false)
+    log.info("warming up sbt done")
   }
 
   private def collect(
@@ -126,14 +116,24 @@ class Sbt(defaultConfig: Inputs, production: Boolean) {
 
   setup()
   collect(noop, reload = false)
-  warmUp()
 
   private def process(command: String,
                       lineCallback: LineCallback,
                       reload: Boolean): Boolean = {
-    fin.write((command + nl).getBytes)
-    fin.flush()
-    collect(lineCallback, reload)
+    log.info("running: {}", command)
+
+    try {
+      fin.write((command + nl).getBytes)
+      fin.flush()
+      collect(lineCallback, reload)
+    } catch {
+      case e: IOException => {
+        // when the snippet is pkilled (timeout) the sbt output stream is closed
+        if (e.getMessage == "Stream closed") true
+        else throw e
+      }
+    }
+
   }
 
   def kill(): Unit = {
@@ -170,7 +170,7 @@ class Sbt(defaultConfig: Inputs, production: Boolean) {
   }
 
   private def setConfig(inputs: Inputs): Unit = {
-    writeFile(buildFile, prompt + nl + inputs.sbtConfig)// + nl + secretSbtConfigExtra)
+    writeFile(buildFile, prompt + nl + inputs.sbtConfig)
     currentSbtConfig = inputs.sbtConfig
   }
 
@@ -213,22 +213,18 @@ class Sbt(defaultConfig: Inputs, production: Boolean) {
     }
 
     val reloadError =
-      if (isReloading) {
-        process("reload", lineCallback, reload = true)
-      } else false
+      if (isReloading) process("reload", lineCallback, reload = true)
+      else false
 
     if (!reloadError) {
       write(codeFile, inputs.code, truncate = true)
-      try {
-        if (isReloading && !commandIfNeedsReload.isEmpty)
-          process(commandIfNeedsReload, lineCallback, reload)
-        if (!command.isEmpty) process(command, lineCallback, reload)
-      } catch {
-        case e: IOException => {
-          // when the snippet is pkilled (timeout) the sbt output stream is closed
-          if (e.getMessage == "Stream closed") ()
-          else throw e
-        }
+
+      if (isReloading && !commandIfNeedsReload.isEmpty) {
+        process(commandIfNeedsReload, lineCallback, reload)
+      }
+
+      if (!command.isEmpty) {
+        process(command, lineCallback, reload)
       }
     }
 
