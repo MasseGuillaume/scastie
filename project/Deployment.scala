@@ -13,6 +13,8 @@ import com.typesafe.sbt.SbtNativePackager.Universal
 import sbtdocker.DockerKeys.{docker, dockerBuildAndPush, imageNames}
 import sbtdocker.ImageName
 
+import scala.sys.process.Process
+
 object Deployment {
   def settings(server: Project,
                sbtRunner: Project,

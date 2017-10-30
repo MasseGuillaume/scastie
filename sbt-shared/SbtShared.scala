@@ -6,6 +6,8 @@ import org.scalajs.sbtplugin.cross.CrossProject
 import sbtbuildinfo.BuildInfoPlugin
 import sbtbuildinfo.BuildInfoPlugin.autoImport._
 
+import scala.sys.process.Process
+
 import System.{lineSeparator => nl}
 
 import java.util.Properties
@@ -49,7 +51,7 @@ object SbtShared {
         if (gitIsDirty()) "-dirty"
         else ""
 
-      Process("git rev-parse --verify HEAD").lines.mkString("") + indexState
+      Process("git rev-parse --verify HEAD").lineStream.mkString("") + indexState
     } else "CI"
   }
 
