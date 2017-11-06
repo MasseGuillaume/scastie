@@ -180,7 +180,7 @@ object BuildSettings {
         )
       ).when(!props.isBuildDefault)
 
-    val scaladexSearch = ScaladexSearch(
+    val scaladexSearch = ScaladexSearch2(
       removeScalaDependency = props.removeScalaDependency,
       updateDependencyVersion = props.updateDependencyVersion,
       addScalaDependency = props.addScalaDependency,
