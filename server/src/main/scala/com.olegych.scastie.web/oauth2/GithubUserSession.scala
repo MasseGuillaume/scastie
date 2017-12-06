@@ -8,7 +8,7 @@ import com.softwaremill.session._
 import com.typesafe.config.ConfigFactory
 
 import scala.collection.parallel.mutable.ParTrieMap
-import scala.concurrent.ExecutionContext
+import scala.concurrent.{ExecutionContext, Future}
 import com.typesafe.scalalogging.Logger
 
 import scala.util.Try
@@ -16,6 +16,7 @@ import java.util.UUID
 import java.nio.file._
 
 import scala.collection.JavaConverters._
+import scala.collection.mutable
 
 import System.{lineSeparator => nl}
 
@@ -110,3 +111,39 @@ class GithubUserSession()(implicit val executionContext: ExecutionContext) {
   def getUser(id: Option[UUID]): Option[User] =
     id.flatMap(users.get)
 }
+
+trait InMemoryRefreshTokenStorage[T] extends RefreshTokenStorage[T] {
+  case class Store(session: T, tokenHash: String, expires: Long)
+  private val _store = mutable.Map[String, Store]()
+
+  def store: Map[String, Store] = _store.toMap
+
+  override def lookup(selector: String) = {
+    Future.successful {
+      val r = _store.get(selector).map(s => RefreshTokenLookupResult[T](s.tokenHash, s.expires,
+        () => s.session))
+      log(s"Looking up token for selector: $selector, found: ${r.isDefined}")
+      r
+    }
+  }
+
+  override def store(data: RefreshTokenData[T]) = {
+    log(s"Storing token for selector: ${data.selector}, user: ${data.forSession}, " +
+      s"expires: ${data.expires}, now: ${System.currentTimeMillis()}")
+    Future.successful(_store.put(data.selector, Store(data.forSession, data.tokenHash, data.expires)))
+  }
+
+  override def remove(selector: String) = {
+    log(s"Removing token for selector: $selector")
+    Future.successful(_store.remove(selector))
+  }
+
+  override def schedule[S](after: Duration)(op: => Future[S]) = {
+    log("Running scheduled operation immediately")
+    op
+    Future.successful(())
+  }
+
+  def log(msg: String): Unit
+}
+
