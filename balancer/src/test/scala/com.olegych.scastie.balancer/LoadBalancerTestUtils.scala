@@ -14,7 +14,9 @@ case class TestTaskId(id: Int) extends TaskId {
 }
 
 case class TestServerRef(id: Int)
-case class TestConfig(config: String)
+case class TestConfig(config: String) {
+  override def toString: String = config
+}
 case class TestState(state: String, ready: Boolean = true) extends ServerState {
   def isReady: Boolean = ready
 }
@@ -68,6 +70,32 @@ trait LoadBalancerTestUtils extends FunSuite with TestUtils {
     balancer0
   }
 
+  object MutableTestLoadBalancer {
+    def apply(
+        servers: Vector[TestServer0],
+        history: History[TestConfig]
+    ): MutableTestLoadBalancer = {
+      new MutableTestLoadBalancer(TestLoadBalancer(servers, history))
+    }
+  }
+  class MutableTestLoadBalancer(var inner: TestLoadBalancer0) {
+    var lastTask: Option[TestTaskId] = None
+    def add(c: String): Unit = {
+      val ip = Ip("ip")
+      val id = TestTaskId(taskId)
+      val (assigned, balancer) = inner.add(Task(config(c), ip, id)).get
+      inner = balancer
+      lastTask = Some(id)
+    }
+    def done(): Unit = {
+      lastTask.foreach{taskId =>
+        inner = inner.done(taskId)
+      }
+    }
+    def configs: Set[TestConfig] = 
+      inner.servers.map(_.lastConfig).toSet
+  }
+
   def assertConfigs(
       balancer: TestLoadBalancer0
   )(columns: Seq[String]*): Assertion = {
@@ -93,6 +121,10 @@ trait LoadBalancerTestUtils extends FunSuite with TestUtils {
 
   def servers(columns: Seq[String]*): Vector[TestServer0] = {
     columns.to[Vector].flatten.map(c => server(c))
+  }
+
+  def configs(columns: Seq[String]*): Vector[TestConfig] = {
+    columns.to[Vector].flatten.map(c => config(c))
   }
 
   private var currentIp = 0

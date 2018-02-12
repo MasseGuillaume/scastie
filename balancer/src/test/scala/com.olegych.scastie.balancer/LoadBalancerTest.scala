@@ -6,6 +6,19 @@ import scala.collection.immutable.Queue
 class LoadBalancerTest extends LoadBalancerTestUtils {
   scala.util.Random.setSeed(0)
 
+  test("bug #382") {
+    val c0 = "c0"
+    val c1 = "c1"
+    val balancer = MutableTestLoadBalancer(servers(5 * c0), history(20 * c0))
+    val oneC1 = configs(4 * c0, 1 * c1).toSet
+
+    (1 to 4).foreach{ i =>
+      balancer.add(c1)
+      balancer.done()
+      assert(balancer.configs == oneC1)
+    }
+  }
+
   test("simple cache miss") {
     val balancer =
       TestLoadBalancer(
@@ -223,14 +236,14 @@ class LoadBalancerTest extends LoadBalancerTestUtils {
     assert(emptyBalancer.add(task).isEmpty)
   }
 
-  // test("unavailable servers") {
-  //   val s1 = server("c1")
-  //   val s2 = server("c2")
-  //   val s2NotReady = s2.copy(state = s2.state.copy(ready = false))
-  //   val balancer = TestLoadBalancer(
-  //     servers = Vector(s1, s2NotReady),
-  //     history = History(Queue(), size = 1)
-  //   )
-  //   balancer
-  // }
+  test("unavailable servers") {
+    val s1 = server("c1")
+    val s2 = server("c2")
+    val s2NotReady = s2.copy(state = s2.state.copy(ready = false))
+    val balancer = TestLoadBalancer(
+      servers = Vector(s1, s2NotReady),
+      history = History(Queue(), size = 1)
+    )
+    balancer
+  }
 }
