@@ -410,3 +410,15 @@ lazy val e2e = project
   .settings(
     libraryDependencies += "org.seleniumhq.selenium" % "selenium-java" % "3.5.3"
   )
+
+lazy val integration = project
+  .settings(baseSettings)
+  .settings(testSettings)
+  .settings(
+    libraryDependencies ++= Seq(
+      akka("remote") % Test,
+      akka("testkit") % Test
+    )
+  )
+  .dependsOn(sbtRunner, balancer)
+

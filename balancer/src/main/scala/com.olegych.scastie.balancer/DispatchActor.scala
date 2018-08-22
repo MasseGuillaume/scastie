@@ -19,6 +19,7 @@ import com.typesafe.config.ConfigFactory
 
 import scala.concurrent._
 import scala.concurrent.duration._
+import scala.util.control.NonFatal
 import java.util.concurrent.{TimeUnit, TimeoutException, Executors}
 import java.nio.file.Paths
 
@@ -50,10 +51,7 @@ case class ReceiveStatus(requester: ActorRef)
 
 case class Run(inputsWithIpAndUser: InputsWithIpAndUser, snippetId: SnippetId)
 
-class DispatchActor(progressActor: ActorRef, statusActor: ActorRef)
-// extends PersistentActor with AtLeastOnceDelivery
-    extends Actor
-    with ActorLogging {
+class DispatchActor(progressActor: ActorRef, statusActor: ActorRef) extends Actor with ActorLogging {
 
   override def supervisorStrategy: SupervisorStrategy = OneForOneStrategy() {
     case e =>
@@ -70,8 +68,12 @@ class DispatchActor(progressActor: ActorRef, statusActor: ActorRef)
   val sbtConfig = ConfigFactory.load().getConfig("com.olegych.scastie.sbt")
 
   val isProduction = {
-    val config = ConfigFactory.load().getConfig("com.olegych.scastie.web")
-    config.getBoolean("production")
+    try {
+      val config = ConfigFactory.load().getConfig("com.olegych.scastie.web")
+      config.getBoolean("production")
+    } catch {
+      case NonFatal(e) => false
+    }
   }
 
   val sbtRunTimeout = {
@@ -193,34 +195,6 @@ class DispatchActor(progressActor: ActorRef, statusActor: ActorRef)
     ()
   }
 
-  //can be called from future
-  private def run(inputsWithIpAndUser: InputsWithIpAndUser,
-                  snippetId: SnippetId): Unit = {
-    self ! Run(inputsWithIpAndUser, snippetId)
-  }
-  //cannot be called from future
-  private def run0(inputsWithIpAndUser: InputsWithIpAndUser,
-                   snippetId: SnippetId): Unit = {
-
-    val InputsWithIpAndUser(inputs, UserTrace(ip, user)) = inputsWithIpAndUser
-
-    log.info("id: {}, ip: {} run inputs: {}", snippetId, ip, inputs)
-
-    val task = Task(inputs, Ip(ip), SbtRunTaskId(snippetId))
-
-    sbtLoadBalancer.add(task) match {
-      case Some((server, newBalancer)) => {
-        updateSbtBalancer(newBalancer)
-
-        server.ref.tell(
-          SbtTask(snippetId, inputs, ip, user.map(_.login), progressActor),
-          self
-        )
-      }
-      case _ => ()
-    }
-  }
-
   def receive: Receive = event.LoggingReceive(event.Logging.InfoLevel) {
     case SbtPong => ()
 
@@ -234,11 +208,10 @@ class DispatchActor(progressActor: ActorRef, statusActor: ActorRef)
       log.info(s"starting ${x}")
       val InputsWithIpAndUser(inputs, UserTrace(_, user)) = inputsWithIpAndUser
       val sender = this.sender
-      container.create(inputs, user.map(u => UserLogin(u.login))).map {
-        snippetId =>
-          run(inputsWithIpAndUser, snippetId)
-          log.info(s"finished ${x}")
-          sender ! snippetId
+      container.create(inputs, user.map(u => UserLogin(u.login))).map {snippetId =>
+        self ! Run(inputsWithIpAndUser, snippetId)
+        log.info(s"finished ${x}")
+        sender ! snippetId
       }
     }
 
@@ -247,7 +220,7 @@ class DispatchActor(progressActor: ActorRef, statusActor: ActorRef)
       val sender = this.sender
       container.save(inputs, user.map(u => UserLogin(u.login))).map {
         snippetId =>
-          run(inputsWithIpAndUser, snippetId)
+          self ! Run(inputsWithIpAndUser, snippetId)
           sender ! snippetId
       }
     }
@@ -257,7 +230,7 @@ class DispatchActor(progressActor: ActorRef, statusActor: ActorRef)
       container.amend(snippetId, inputsWithIpAndUser.inputs).map {
         amendSuccess =>
           if (amendSuccess) {
-            run(inputsWithIpAndUser, snippetId)
+            self ! Run(inputsWithIpAndUser, snippetId)
           }
           sender ! amendSuccess
       }
@@ -268,7 +241,7 @@ class DispatchActor(progressActor: ActorRef, statusActor: ActorRef)
       container.update(snippetId, inputsWithIpAndUser.inputs).map {
         updatedSnippetId =>
           updatedSnippetId.foreach(
-            snippetIdU => run(inputsWithIpAndUser, snippetIdU)
+            snippetIdU => self ! Run(inputsWithIpAndUser, snippetId)
           )
           sender ! updatedSnippetId
       }
@@ -282,7 +255,7 @@ class DispatchActor(progressActor: ActorRef, statusActor: ActorRef)
         .fork(snippetId, inputs, user.map(u => UserLogin(u.login)))
         .map { forkedSnippetId =>
           sender ! Some(forkedSnippetId)
-          run(inputsWithIpAndUser, forkedSnippetId)
+          self ! Run(inputsWithIpAndUser, snippetId)
         }
     }
 
@@ -387,8 +360,22 @@ class DispatchActor(progressActor: ActorRef, statusActor: ActorRef)
       statusActor ! statusProgress
     }
 
-    case run: Run => {
-      run0(run.inputsWithIpAndUser, run.snippetId)
+    case Run(InputsWithIpAndUser(inputs, UserTrace(ip, user)), snippetId) => {
+      log.info("id: {}, ip: {} run inputs: {}", snippetId, ip, inputs)
+
+      val task = Task(inputs, Ip(ip), SbtRunTaskId(snippetId))
+
+      sbtLoadBalancer.add(task) match {
+        case Some((server, newBalancer)) => {
+          updateSbtBalancer(newBalancer)
+
+          server.ref.tell(
+            SbtTask(snippetId, inputs, ip, user.map(_.login), progressActor),
+            self
+          )
+        }
+        case _ => ()
+      }
     }
   }
 }

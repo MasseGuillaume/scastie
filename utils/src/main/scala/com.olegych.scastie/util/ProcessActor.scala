@@ -89,7 +89,6 @@ class ProcessActor(command: List[String],
 
   override def receive: Receive = {
     case Started(pid, stdin, stdout, stderr) => {
-      println("process started: " + pid)
       lines(stdout)
         .map(line => ProcessOutput(line, ProcessOutputType.StdOut))
         .merge(

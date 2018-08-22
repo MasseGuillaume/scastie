@@ -161,7 +161,6 @@ class BlockingProcess(command: immutable.Seq[String],
     SupervisorStrategy.stoppingStrategy
 
   override def preStart(): Unit = {
-    println("preStart")
     val process: JavaProcess = {
       import JavaConverters._
       val preparedCommand = prepareCommand(command)
